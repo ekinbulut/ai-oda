@@ -1,12 +1,21 @@
-.PHONY: dev worker swagger build clean
+.PHONY: dev worker swagger build clean crewai crewai-install
 
 # API sunucusunu geliştirme modunda başlat
 dev:
 	go run ./cmd/api
 
-# Worker'ı geliştirme modunda başlat
+# Worker'ı geliştirme modunda başlat (Redis Bridge ile)
 worker:
 	go run ./cmd/worker
+
+# CrewAI Bridge'i geliştirme modunda başlat
+crewai:
+	cd crewai && python -m src.main
+
+# CrewAI Python bağımlılıklarını yükle
+crewai-install:
+	cd crewai && pip install -e .
+	@echo "✅ CrewAI bağımlılıkları yüklendi"
 
 # Swagger dokümantasyonunu yeniden üret
 swagger:

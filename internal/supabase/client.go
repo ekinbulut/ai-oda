@@ -296,6 +296,112 @@ func (c *Client) UpdateMediaVisionAnalysis(ctx context.Context, assetID string, 
 	return nil
 }
 
+// InteractionAnalytics, interaction_analytics tablosundaki bir kaydı temsil eder.
+type InteractionAnalytics struct {
+	ID             string  `json:"id"`
+	AssetID        string  `json:"asset_id"`
+	Likes          int     `json:"likes"`
+	Comments       int     `json:"comments"`
+	Shares         int     `json:"shares"`
+	Saves          int     `json:"saves"`
+	Impressions    int     `json:"impressions"`
+	Reach          int     `json:"reach"`
+	EngagementRate float64 `json:"engagement_rate"`
+}
+
+// TopPerformingAsset, en iyi performans gösteren görseli analitik verileriyle birlikte temsil eder.
+type TopPerformingAsset struct {
+	Asset      MediaAsset           `json:"asset"`
+	Analytics  InteractionAnalytics `json:"analytics"`
+}
+
+// GetTopPerformingAssets, belirtilen kullanıcının en iyi performans gösteren N görselini döner.
+// Sıralama engagement_rate'e göre azalan şekilde yapılır.
+func (c *Client) GetTopPerformingAssets(ctx context.Context, userID string, limit int) ([]TopPerformingAsset, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+
+	// 1. Kullanıcının medya varlıklarını getir
+	assetsURL := fmt.Sprintf("%s/rest/v1/media_assets?user_id=eq.%s&order=created_at.desc", c.config.URL, userID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var assets []MediaAsset
+	if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
+		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	if len(assets) == 0 {
+		return nil, nil
+	}
+
+	// 2. Her varlığın en güncel analytik verisini getir ve en iyilerini seç
+	var results []TopPerformingAsset
+	for _, asset := range assets {
+		analyticsURL := fmt.Sprintf(
+			"%s/rest/v1/interaction_analytics?asset_id=eq.%s&order=fetched_at.desc&limit=1",
+			c.config.URL, asset.ID,
+		)
+
+		aReq, err := http.NewRequestWithContext(ctx, http.MethodGet, analyticsURL, nil)
+		if err != nil {
+			continue
+		}
+		c.setHeaders(aReq)
+
+		aResp, err := c.httpClient.Do(aReq)
+		if err != nil {
+			continue
+		}
+
+		var analytics []InteractionAnalytics
+		if err := json.NewDecoder(aResp.Body).Decode(&analytics); err != nil {
+			aResp.Body.Close()
+			continue
+		}
+		aResp.Body.Close()
+
+		if len(analytics) > 0 {
+			results = append(results, TopPerformingAsset{
+				Asset:     asset,
+				Analytics: analytics[0],
+			})
+		}
+	}
+
+	// 3. engagement_rate'e göre sırala (azalan)
+	for i := 0; i < len(results)-1; i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Analytics.EngagementRate > results[i].Analytics.EngagementRate {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+
+	// 4. Limit kadar döndür
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
+}
+
 // GetAgentContext, belirtilen kullanıcının marka bağlamını getirir.
 // Marka sesi ve anahtar kelimeler, vision analizinde bağlam olarak kullanılır.
 func (c *Client) GetAgentContext(ctx context.Context, userID string) (*AgentContext, error) {
