@@ -202,3 +202,131 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Prefer", "return=representation")
 }
 
+// MediaAsset, media_assets tablosundaki bir kaydı temsil eder.
+type MediaAsset struct {
+	ID              string                 `json:"id"`
+	UserID          string                 `json:"user_id"`
+	MediaType       string                 `json:"media_type"`
+	StorageURL      string                 `json:"storage_url"`
+	IsPublished     bool                   `json:"is_published"`
+	VisionAnalysis  map[string]interface{} `json:"vision_analysis"`
+	OriginalFilename string               `json:"original_filename"`
+	FileSizeBytes   int64                  `json:"file_size_bytes"`
+	MimeType        string                 `json:"mime_type"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+}
+
+// AgentContext, agent_context tablosundaki marka bağlamını temsil eder.
+type AgentContext struct {
+	ID                         string                 `json:"id"`
+	UserID                     string                 `json:"user_id"`
+	BrandVoice                 string                 `json:"brand_voice"`
+	TargetAudience             string                 `json:"target_audience"`
+	NegativePrompts            []string               `json:"negative_prompts"`
+	ContentPillars             []string               `json:"content_pillars"`
+	VisualStylePreferences     map[string]interface{} `json:"visual_style_preferences"`
+}
+
+// GetMediaAsset, belirtilen ID'ye sahip medya varlığını getirir.
+func (c *Client) GetMediaAsset(ctx context.Context, assetID string) (*MediaAsset, error) {
+	url := fmt.Sprintf("%s/rest/v1/media_assets?id=eq.%s", c.config.URL, assetID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var assets []MediaAsset
+	if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
+		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	if len(assets) == 0 {
+		return nil, fmt.Errorf("medya varlığı bulunamadı: %s", assetID)
+	}
+
+	return &assets[0], nil
+}
+
+// UpdateMediaVisionAnalysis, bir medya varlığının vision_analysis alanını günceller.
+// visionData parametresi AI tarafından üretilen analiz sonucunu içerir.
+func (c *Client) UpdateMediaVisionAnalysis(ctx context.Context, assetID string, visionData map[string]interface{}) error {
+	url := fmt.Sprintf("%s/rest/v1/media_assets?id=eq.%s", c.config.URL, assetID)
+
+	payload := map[string]interface{}{
+		"vision_analysis": visionData,
+		"updated_at":      time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("vision analizi kaydedilemedi (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// GetAgentContext, belirtilen kullanıcının marka bağlamını getirir.
+// Marka sesi ve anahtar kelimeler, vision analizinde bağlam olarak kullanılır.
+func (c *Client) GetAgentContext(ctx context.Context, userID string) (*AgentContext, error) {
+	url := fmt.Sprintf("%s/rest/v1/agent_context?user_id=eq.%s", c.config.URL, userID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var contexts []AgentContext
+	if err := json.NewDecoder(resp.Body).Decode(&contexts); err != nil {
+		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	if len(contexts) == 0 {
+		return nil, nil // Kullanıcının henüz marka bağlamı yok
+	}
+
+	return &contexts[0], nil
+}
+

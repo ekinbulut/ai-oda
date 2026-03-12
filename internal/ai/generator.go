@@ -30,6 +30,13 @@ type ContentResult struct {
 	ImageAlt string `json:"image_alt"` // Görsel için alternatif metin / prompt
 }
 
+// VisionAnalysisResult, görsel analiz sonucunu tutar.
+type VisionAnalysisResult struct {
+	Description string `json:"description"` // "Bu fotoğrafta ne var?" — Betimleme
+	Mood        string `json:"mood"`        // "Hangi duyguyu uyandırıyor?" — Enerjik, sakin, lüks vb.
+	BrandFit    string `json:"brand_fit"`   // "Marka kimliğine uygun mu?" — Değerlendirme
+}
+
 // NewGenerator, yeni bir AI içerik üretici oluşturur.
 func NewGenerator(cfg Config) (*Generator, error) {
 	if cfg.APIKey == "" {
@@ -202,6 +209,133 @@ Konu: %s`, prompt)
 	var result ContentResult
 	if err := json.Unmarshal([]byte(geminiResp.Candidates[0].Content.Parts[0].Text), &result); err != nil {
 		return nil, fmt.Errorf("içerik JSON çözümlenemedi: %w", err)
+	}
+
+	return &result, nil
+}
+
+// AnalyzeMedia, verilen görsel URL'ini GPT-4o Vision API'sine göndererek
+// betimleme, duygu analizi ve marka uyumu soruları için yanıt üretir.
+// Sadece OpenAI provider desteklenmektedir (GPT-4o vision).
+func (g *Generator) AnalyzeMedia(ctx context.Context, imageURL string) (*VisionAnalysisResult, error) {
+	return g.AnalyzeMediaWithBrandContext(ctx, imageURL, nil, "")
+}
+
+// AnalyzeMediaWithBrandContext, marka bağlamıyla birlikte görsel analiz yapar.
+// brandKeywords ve brandVoice parametreleri opsiyoneldir; verildiğinde
+// marka uyumu değerlendirmesi bu bağlama göre yapılır.
+func (g *Generator) AnalyzeMediaWithBrandContext(ctx context.Context, imageURL string, brandKeywords []string, brandVoice string) (*VisionAnalysisResult, error) {
+	if g.config.Provider != "openai" {
+		return nil, fmt.Errorf("vision analizi sadece OpenAI provider ile desteklenmektedir (mevcut: %s)", g.config.Provider)
+	}
+
+	url := "https://api.openai.com/v1/chat/completions"
+
+	// Marka bağlamı varsa prompt'a ekle
+	brandContext := ""
+	if brandVoice != "" || len(brandKeywords) > 0 {
+		brandContext = "\n\nMarka Bağlamı:"
+		if brandVoice != "" {
+			brandContext += fmt.Sprintf("\n- Marka sesi/tonu: %s", brandVoice)
+		}
+		if len(brandKeywords) > 0 {
+			brandContext += "\n- Marka anahtar kelimeleri: "
+			for i, kw := range brandKeywords {
+				if i > 0 {
+					brandContext += ", "
+				}
+				brandContext += kw
+			}
+		}
+	}
+
+	systemPrompt := fmt.Sprintf(`Sen bir sosyal medya görsel analiz uzmanısın. Sana verilen görseli analiz et ve aşağıdaki üç soruyu cevapla.
+
+1. "Bu fotoğrafta ne var?" — Görselin detaylı bir betimlemesini yap. Nesneleri, kişileri, renkleri, ortamı ve genel kompozisyonu açıkla.
+
+2. "Hangi duyguyu uyandırıyor?" — Görselin uyandırdığı duyguyu veya enerjiyi belirle. Örnek: enerjik, sakin, lüks, samimi, profesyonel, nostaljik, heyecan verici, ilham verici vb.
+
+3. "Marka kimliğine uygun mu?" — Bu görselin sosyal medya markalaması için uygun olup olmadığını değerlendir. Kalite, estetik ve profesyonellik açısından yorumla.%s
+
+Yanıtını MUTLAKA şu JSON formatında ver:
+{
+  "description": "Görselin detaylı betimlemesi...",
+  "mood": "Uyandırdığı duygu/enerji (tek veya birkaç kelime)...",
+  "brand_fit": "Marka uyumu değerlendirmesi..."
+}`, brandContext)
+
+	// GPT-4o Vision API: multi-modal content (text + image_url)
+	payload := map[string]interface{}{
+		"model": g.config.Model,
+		"messages": []map[string]interface{}{
+			{
+				"role":    "system",
+				"content": systemPrompt,
+			},
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": "Bu görseli analiz et.",
+					},
+					{
+						"type": "image_url",
+						"image_url": map[string]string{
+							"url":    imageURL,
+							"detail": "high",
+						},
+					},
+				},
+			},
+		},
+		"temperature":     0.4,
+		"max_tokens":      1000,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.config.APIKey))
+
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("vision API isteği gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("OpenAI Vision API hatası (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var openAIResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
+		return nil, fmt.Errorf("vision yanıtı çözümlenemedi: %w", err)
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		return nil, fmt.Errorf("OpenAI Vision boş yanıt döndü")
+	}
+
+	var result VisionAnalysisResult
+	if err := json.Unmarshal([]byte(openAIResp.Choices[0].Message.Content), &result); err != nil {
+		return nil, fmt.Errorf("vision JSON çözümlenemedi: %w", err)
 	}
 
 	return &result, nil
