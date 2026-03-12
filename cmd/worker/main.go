@@ -16,6 +16,7 @@ import (
 	"github.com/ekinbulut/x/internal/bridge"
 	"github.com/ekinbulut/x/internal/social"
 	"github.com/ekinbulut/x/internal/supabase"
+	"github.com/ekinbulut/x/internal/watcher"
 )
 
 func main() {
@@ -77,6 +78,11 @@ func main() {
 		log.Println("✅ Redis Bridge aktif — CrewAI haberleşmesi hazır")
 	}
 
+	// Otonom Tetikleyici (Watcher) başlat
+	userWatcher := watcher.NewFromEnv(sbClient, aiGenerator, redisBridge)
+	go userWatcher.Start(ctx)
+	log.Println("✅ Watcher (Otonom Tetikleyici) başlatıldı")
+
 	// OS sinyallerini dinle
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -107,7 +113,7 @@ func processAgentTasks(
 	ctx context.Context,
 	sbClient *supabase.Client,
 	aiGen *ai.Generator,
-	igClient *social.InstagramClient,
+	_ *social.InstagramClient, // igClient — ileride görev sonrası Instagram yayınlama için kullanılacak
 	redisBridge *bridge.RedisBridge,
 ) {
 	log.Println("🔄 Bekleyen görevler kontrol ediliyor...")

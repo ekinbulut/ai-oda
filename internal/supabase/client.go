@@ -436,3 +436,236 @@ func (c *Client) GetAgentContext(ctx context.Context, userID string) (*AgentCont
 	return &contexts[0], nil
 }
 
+// AutoContentTask, otonom tetikleyici (Watcher) tarafından oluşturulan içerik görevini temsil eder.
+type AutoContentTask struct {
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	Status      string    `json:"status"`
+	ContentType string    `json:"content_type"`
+	Prompt      string    `json:"prompt"`
+	Result      string    `json:"result,omitempty"`
+	ScheduledAt time.Time `json:"scheduled_at"`
+}
+
+// GetActiveAgentUsers, ajan konfigürasyonu aktif olan tüm kullanıcıların ID'lerini döner.
+func (c *Client) GetActiveAgentUsers(ctx context.Context) ([]string, error) {
+	url := fmt.Sprintf("%s/rest/v1/agent_configs?is_active=eq.true&select=user_id", c.config.URL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var configs []struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&configs); err != nil {
+		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	userIDs := make([]string, len(configs))
+	for i, cfg := range configs {
+		userIDs[i] = cfg.UserID
+	}
+
+	return userIDs, nil
+}
+
+// GetLastPublishedTaskTime, kullanıcının en son "completed" durumundaki görevinin
+// updated_at zamanını döner. Hiç yayın yoksa sıfır zaman döner.
+func (c *Client) GetLastPublishedTaskTime(ctx context.Context, userID string) (time.Time, error) {
+	url := fmt.Sprintf(
+		"%s/rest/v1/content_tasks?user_id=eq.%s&status=eq.completed&order=updated_at.desc&limit=1&select=updated_at",
+		c.config.URL, userID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return time.Time{}, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tasks []struct {
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		return time.Time{}, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		return time.Time{}, nil // Henüz hiç paylaşım yok
+	}
+
+	return tasks[0].UpdatedAt, nil
+}
+
+// HasPendingAutoTask, kullanıcının halihazırda bekleyen bir otonom (Senaryo B) görevi
+// olup olmadığını kontrol eder. Çift tetiklemeyi önlemek için kullanılır.
+func (c *Client) HasPendingAutoTask(ctx context.Context, userID string) (bool, error) {
+	url := fmt.Sprintf(
+		"%s/rest/v1/content_tasks?user_id=eq.%s&status=in.(pending,processing)&prompt=like.*Senaryo B*&select=id&limit=1",
+		c.config.URL, userID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tasks []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		return false, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	return len(tasks) > 0, nil
+}
+
+// GetUnpublishedAssets, kullanıcının henüz yayınlanmamış medya varlıklarını döner.
+// Sonuçlar oluşturulma tarihine göre azalan sıralıdır (en yeni ilk).
+func (c *Client) GetUnpublishedAssets(ctx context.Context, userID string, limit int) ([]MediaAsset, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	url := fmt.Sprintf(
+		"%s/rest/v1/media_assets?user_id=eq.%s&is_published=eq.false&order=created_at.desc&limit=%d",
+		c.config.URL, userID, limit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("beklenmeyen durum kodu %d: %s", resp.StatusCode, string(body))
+	}
+
+	var assets []MediaAsset
+	if err := json.NewDecoder(resp.Body).Decode(&assets); err != nil {
+		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
+	}
+
+	return assets, nil
+}
+
+// CreateAutoContentTask, otonom tetikleyici tarafından oluşturulan içerik görevini Supabase'e kaydeder.
+func (c *Client) CreateAutoContentTask(ctx context.Context, task AutoContentTask) error {
+	url := fmt.Sprintf("%s/rest/v1/content_tasks", c.config.URL)
+
+	payload := map[string]interface{}{
+		"id":           task.ID,
+		"user_id":      task.UserID,
+		"status":       task.Status,
+		"content_type": task.ContentType,
+		"prompt":       task.Prompt,
+		"result":       task.Result,
+		"scheduled_at": task.ScheduledAt.UTC().Format(time.RFC3339),
+		"created_at":   time.Now().UTC().Format(time.RFC3339),
+		"updated_at":   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("otonom görev kaydedilemedi (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// MarkAssetPublished, bir medya varlığının is_published alanını true olarak günceller.
+// Bu, aynı görselin tekrar otonom olarak seçilmesini önler.
+func (c *Client) MarkAssetPublished(ctx context.Context, assetID string) error {
+	url := fmt.Sprintf("%s/rest/v1/media_assets?id=eq.%s", c.config.URL, assetID)
+
+	payload := map[string]interface{}{
+		"is_published": true,
+		"updated_at":   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("varlık güncellenemedi (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
