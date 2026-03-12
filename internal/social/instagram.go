@@ -29,6 +29,14 @@ type PublishResult struct {
 	Permalink string `json:"permalink,omitempty"`
 }
 
+// InstagramInsights, bir gönderinin etkileşim metriklerini temsil eder.
+type InstagramInsights struct {
+	Impressions int `json:"impressions"`
+	Reach       int `json:"reach"`
+	Engagement  int `json:"engagement"`
+	Saves       int `json:"saved"`
+}
+
 // NewInstagramClient, yeni bir Instagram istemcisi oluşturur.
 func NewInstagramClient(cfg InstagramConfig) *InstagramClient {
 	return &InstagramClient{
@@ -40,11 +48,11 @@ func NewInstagramClient(cfg InstagramConfig) *InstagramClient {
 	}
 }
 
-// PublishPhoto, bir fotoğrafı Instagram'a yayınlar.
+// PostMedia, bir fotoğrafı Instagram'a yayınlar.
 // Instagram Graph API iki adımlı bir süreç kullanır:
 // 1. Medya kapsayıcısı oluştur
 // 2. Kapsayıcıyı yayınla
-func (c *InstagramClient) PublishPhoto(ctx context.Context, imageURL, caption string) (*PublishResult, error) {
+func (c *InstagramClient) PostMedia(ctx context.Context, imageURL, caption string) (*PublishResult, error) {
 	// Adım 1: Medya kapsayıcısı oluştur
 	containerID, err := c.createMediaContainer(ctx, imageURL, caption)
 	if err != nil {
@@ -142,7 +150,7 @@ func (c *InstagramClient) publishMedia(ctx context.Context, containerID string) 
 }
 
 // GetPostInsights, bir gönderinin etkileşim istatistiklerini getirir.
-func (c *InstagramClient) GetPostInsights(ctx context.Context, postID string) (map[string]interface{}, error) {
+func (c *InstagramClient) GetPostInsights(ctx context.Context, postID string) (*InstagramInsights, error) {
 	url := fmt.Sprintf(
 		"%s/%s/insights?metric=impressions,reach,engagement,saved&access_token=%s",
 		c.baseURL, postID, c.config.AccessToken,
@@ -159,10 +167,42 @@ func (c *InstagramClient) GetPostInsights(ctx context.Context, postID string) (m
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API hatası (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var response struct {
+		Data []struct {
+			Name   string `json:"name"`
+			Values []struct {
+				Value int `json:"value"`
+			} `json:"values"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("yanıt çözümlenemedi: %w", err)
 	}
 
-	return result, nil
+	insights := &InstagramInsights{}
+	for _, metric := range response.Data {
+		value := 0
+		if len(metric.Values) > 0 {
+			value = metric.Values[0].Value
+		}
+
+		switch metric.Name {
+		case "impressions":
+			insights.Impressions = value
+		case "reach":
+			insights.Reach = value
+		case "engagement":
+			insights.Engagement = value
+		case "saved":
+			insights.Saves = value
+		}
+	}
+
+	return insights, nil
 }

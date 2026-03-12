@@ -31,15 +31,28 @@ type User struct {
 
 // ContentTask, zamanlanmış bir içerik görevini temsil eder.
 type ContentTask struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	Status      string    `json:"status"` // pending, processing, completed, failed
-	ContentType string    `json:"content_type"`
-	Prompt      string    `json:"prompt"`
-	Result      string    `json:"result,omitempty"`
-	ScheduledAt time.Time `json:"scheduled_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	UserID             string    `json:"user_id"`
+	InstagramAccountID string    `json:"instagram_account_id,omitempty"`
+	Status             string    `json:"status"` // pending, processing, completed, failed
+	ContentType        string    `json:"content_type"`
+	Prompt             string    `json:"prompt"`
+	Result             string    `json:"result,omitempty"`
+	InstagramPostID    string    `json:"instagram_post_id,omitempty"`
+	ScheduledAt        time.Time `json:"scheduled_at"`
+	PublishedAt        time.Time `json:"published_at,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// InstagramAccount, instagram_accounts tablosundaki bir kaydı temsil eder.
+type InstagramAccount struct {
+	ID                 string    `json:"id"`
+	UserID             string    `json:"user_id"`
+	InstagramAccountID string    `json:"instagram_account_id"`
+	AccessToken        string    `json:"access_token"`
+	Username           string    `json:"username"`
+	IsActive           bool      `json:"is_active"`
 }
 
 // NewClient, yeni bir Supabase istemcisi oluşturur.
@@ -669,3 +682,129 @@ func (c *Client) MarkAssetPublished(ctx context.Context, assetID string) error {
 
 	return nil
 }
+
+// GetActiveInstagramAccounts, tüm aktif Instagram hesaplarını getirir.
+func (c *Client) GetActiveInstagramAccounts(ctx context.Context) ([]InstagramAccount, error) {
+	url := fmt.Sprintf("%s/rest/v1/instagram_accounts?is_active=eq.true", c.config.URL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var accounts []InstagramAccount
+	if err := json.NewDecoder(resp.Body).Decode(&accounts); err != nil {
+		return nil, err
+	}
+
+	return accounts, nil
+}
+
+// GetPublishedTasks, yayınlanmış (instagram_post_id olan) görevleri getirir.
+func (c *Client) GetPublishedTasks(ctx context.Context) ([]ContentTask, error) {
+	url := fmt.Sprintf("%s/rest/v1/content_tasks?instagram_post_id=not.is.null&status=eq.completed", c.config.URL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var tasks []ContentTask
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+// CreateInteractionAnalytics, yeni bir etkileşim analitiği kaydı oluşturur.
+func (c *Client) CreateInteractionAnalytics(ctx context.Context, analytics InteractionAnalytics) error {
+	url := fmt.Sprintf("%s/rest/v1/interaction_analytics", c.config.URL)
+
+	payload := map[string]interface{}{
+		"asset_id":        analytics.AssetID,
+		"likes":           analytics.Likes,
+		"comments":        analytics.Comments,
+		"shares":          analytics.Shares,
+		"saves":           analytics.Saves,
+		"impressions":     analytics.Impressions,
+		"reach":           analytics.Reach,
+		"engagement_rate": analytics.EngagementRate,
+		"fetched_at":      time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("analitik kaydedilemedi (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UpdateTaskWithPostID, bir görevi Instagram post ID'si ile günceller.
+func (c *Client) UpdateTaskWithPostID(ctx context.Context, taskID, postID string) error {
+	url := fmt.Sprintf("%s/rest/v1/content_tasks?id=eq.%s", c.config.URL, taskID)
+
+	payload := map[string]interface{}{
+		"instagram_post_id": postID,
+		"published_at":      time.Now().UTC().Format(time.RFC3339),
+		"status":            "completed",
+		"updated_at":        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("görev güncellenemedi (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+

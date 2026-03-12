@@ -93,10 +93,23 @@ func main() {
 
 	log.Println("✅ Worker hazır. Otonom ajan döngüsü başlatıldı.")
 
+	// Günlük etkileşim senkronizasyonu için takipçi
+	lastSyncDate := ""
+
 	for {
 		select {
 		case <-ticker.C:
 			processAgentTasks(ctx, sbClient, aiGenerator, igClient, redisBridge)
+
+			// Günde bir kez Insights Sync çalıştır (Örn: Gece 02:00 civarı)
+			now := time.Now()
+			dateStr := now.Format("2006-01-02")
+			if now.Hour() == 2 && dateStr != lastSyncDate {
+				log.Println("📊 Günlük etkileşim senkronizasyonu başlatılıyor...")
+				syncInstagramInsights(ctx, sbClient)
+				lastSyncDate = dateStr
+				log.Println("✅ Günlük etkileşim senkronizasyonu tamamlandı.")
+			}
 		case sig := <-sigChan:
 			log.Printf("🛑 Sinyal alındı: %v. Worker kapatılıyor...", sig)
 			cancel()
@@ -113,7 +126,7 @@ func processAgentTasks(
 	ctx context.Context,
 	sbClient *supabase.Client,
 	aiGen *ai.Generator,
-	_ *social.InstagramClient, // igClient — ileride görev sonrası Instagram yayınlama için kullanılacak
+	igClient *social.InstagramClient,
 	redisBridge *bridge.RedisBridge,
 ) {
 	log.Println("🔄 Bekleyen görevler kontrol ediliyor...")
@@ -148,6 +161,43 @@ func processAgentTasks(
 				// Strateji sonucunu görev sonucu olarak kaydet
 				resultJSON, _ := json.Marshal(strategyResult)
 				_ = sbClient.UpdateTaskStatus(ctx, task.ID, "completed", string(resultJSON))
+
+				// DIRECT PUBLISHING: Güven Puanı > 85 ise doğrudan yayınla
+				if strategyResult.Review != nil && strategyResult.Review.Score > 0.85 {
+					log.Printf("🚀 Yüksek güven puanı (%.2f)! Doğrudan yayınlanıyor...", strategyResult.Review.Score)
+
+					for _, content := range strategyResult.Contents {
+						imageURL := ""
+						// Asset listesinden görsel URL'ini bul
+						for _, asset := range strategyResult.TopAssets {
+							if asset.AssetID == content.AssetID {
+								imageURL = asset.StorageURL
+								break
+							}
+						}
+
+						if imageURL == "" {
+							log.Printf("⚠️ Görev %s için görsel URL'i bulunamadı, atlanıyor.", task.ID)
+							continue
+						}
+
+						// Yayınla
+						res, err := igClient.PostMedia(ctx, imageURL, content.Caption)
+						if err != nil {
+							log.Printf("❌ Otomatik yayınlama hatası: %v", err)
+							continue
+						}
+
+						// Başarılıysa DB'yi güncelle
+						_ = sbClient.UpdateTaskWithPostID(ctx, task.ID, res.PostID)
+						log.Printf("✅ İçerik Instagram'da paylaşıldı: %s", res.PostID)
+
+						// Varlığı yayınlanmış olarak işaretle
+						if content.AssetID != "" {
+							_ = sbClient.MarkAssetPublished(ctx, content.AssetID)
+						}
+					}
+				}
 				continue
 			}
 		}
@@ -180,4 +230,77 @@ func requestCrewAIStrategy(
 
 	// 5 dakika timeout ile CrewAI yanıtını bekle
 	return redisBridge.PublishStrategyRequest(ctx, req, 5*time.Minute)
+}
+
+// syncInstagramInsights, Instagram'dan etkileşim verilerini çekip DB'yi günceller.
+func syncInstagramInsights(ctx context.Context, sbClient *supabase.Client) {
+	// 1. Aktif hesapları al
+	accounts, err := sbClient.GetActiveInstagramAccounts(ctx)
+	if err != nil {
+		log.Printf("❌ Aktif hesaplar alınamadı: %v", err)
+		return
+	}
+
+	// 2. Yayınlanmış son görevleri al
+	tasks, err := sbClient.GetPublishedTasks(ctx)
+	if err != nil {
+		log.Printf("❌ Yayınlanmış görevler alınamadı: %v", err)
+		return
+	}
+
+	for _, account := range accounts {
+		// Bu hesap için geçici bir IG client oluştur
+		igClient := social.NewInstagramClient(social.InstagramConfig{
+			AccessToken: account.AccessToken,
+			AccountID:   account.InstagramAccountID,
+		})
+
+		for _, task := range tasks {
+			// Sadece bu hesabın görevlerini işle
+			if task.InstagramAccountID != account.ID && task.InstagramPostID == "" {
+				continue
+			}
+
+			log.Printf("📉 Insights çekiliyor: Account=%s, PostID=%s", account.Username, task.InstagramPostID)
+
+			insights, err := igClient.GetPostInsights(ctx, task.InstagramPostID)
+			if err != nil {
+				log.Printf("⚠️ Insights hatası (%s): %v", task.InstagramPostID, err)
+				continue
+			}
+
+			// interaction_analytics tablosuna ekle
+			// Not: task.Result'tan asset_id'yi çekmemiz gerekebilir
+			var result bridge.StrategyResponse
+			_ = json.Unmarshal([]byte(task.Result), &result)
+
+			assetID := ""
+			if len(result.Contents) > 0 {
+				assetID = result.Contents[0].AssetID
+			}
+
+			if assetID != "" {
+				err = sbClient.CreateInteractionAnalytics(ctx, supabase.InteractionAnalytics{
+					AssetID:     assetID,
+					Likes:       0, // IG insights API bazen likes'ı farklı döner, impressions/reach/engagement/saved odaklıyız
+					Comments:    0,
+					Shares:      0,
+					Saves:       insights.Saves,
+					Impressions: insights.Impressions,
+					Reach:       insights.Reach,
+					EngagementRate: calculateEngagementRate(insights),
+				})
+				if err != nil {
+					log.Printf("❌ Analitik kaydetme hatası: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func calculateEngagementRate(i *social.InstagramInsights) float64 {
+	if i.Reach == 0 {
+		return 0
+	}
+	return (float64(i.Engagement) / float64(i.Reach)) * 100
 }
