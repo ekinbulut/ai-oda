@@ -1,0 +1,492 @@
+basePath: /
+definitions:
+  cmd_api.AgentConfigResponse:
+    properties:
+      config:
+        additionalProperties: true
+        type: object
+      user_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  cmd_api.CreateTaskRequest:
+    properties:
+      content_type:
+        enum:
+        - photo
+        - carousel
+        - reel
+        - story
+        example: photo
+        type: string
+      prompt:
+        example: Yapay zeka ile ilgili ilham verici bir post
+        type: string
+      scheduled_at:
+        example: "2026-03-14T10:00:00Z"
+        type: string
+    required:
+    - prompt
+    - scheduled_at
+    type: object
+  cmd_api.CreateTaskResponse:
+    properties:
+      message:
+        example: görev oluşturuldu
+        type: string
+      user_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  cmd_api.ErrorResponse:
+    properties:
+      detail:
+        example: Token geçersiz veya süresi dolmuş
+        type: string
+      error:
+        example: unauthorized
+        type: string
+    type: object
+  cmd_api.HealthResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+  cmd_api.InstagramCallbackResponse:
+    properties:
+      expires_at:
+        example: "2026-05-12T00:00:00Z"
+        type: string
+      ig_id:
+        example: "17841400123456789"
+        type: string
+      message:
+        example: Instagram hesabı başarıyla bağlandı
+        type: string
+      username:
+        example: mybusiness
+        type: string
+    type: object
+  cmd_api.InstagramLoginResponse:
+    properties:
+      authorization_url:
+        example: https://www.facebook.com/v21.0/dialog/oauth?client_id=...
+        type: string
+    type: object
+  cmd_api.MessageResponse:
+    properties:
+      message:
+        example: received
+        type: string
+    type: object
+  cmd_api.TaskItem:
+    properties:
+      content_type:
+        example: photo
+        type: string
+      id:
+        example: 660e8400-e29b-41d4-a716-446655440000
+        type: string
+      prompt:
+        example: Teknoloji ile ilgili motivasyon içeriği
+        type: string
+      scheduled_at:
+        example: "2026-03-14T10:00:00Z"
+        type: string
+      status:
+        example: pending
+        type: string
+      user_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  cmd_api.TaskListResponse:
+    properties:
+      tasks:
+        items:
+          $ref: '#/definitions/cmd_api.TaskItem'
+        type: array
+      user_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  cmd_api.UpdateAgentConfigRequest:
+    properties:
+      ai_model:
+        example: gpt-4o
+        type: string
+      ai_provider:
+        enum:
+        - openai
+        - gemini
+        example: openai
+        type: string
+      brand_keywords:
+        example:
+        - yapay zeka
+        - teknoloji
+        - inovasyon
+        items:
+          type: string
+        type: array
+      is_active:
+        example: true
+        type: boolean
+      language:
+        example: tr
+        type: string
+      posting_frequency:
+        enum:
+        - hourly
+        - daily
+        - weekly
+        - custom
+        example: daily
+        type: string
+      preferred_posting_times:
+        example:
+        - "10:00"
+        - "14:00"
+        - "19:00"
+        items:
+          type: string
+        type: array
+      target_audience:
+        example: Teknoloji meraklıları, 25-40 yaş
+        type: string
+      tone:
+        example: professional
+        type: string
+    type: object
+  cmd_api.UserProfileResponse:
+    properties:
+      email:
+        example: user@example.com
+        type: string
+      id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      role:
+        example: authenticated
+        type: string
+    type: object
+  cmd_api.WebhookPayload:
+    properties:
+      old_record:
+        additionalProperties: true
+        type: object
+      record:
+        additionalProperties: true
+        type: object
+      schema:
+        example: public
+        type: string
+      table:
+        example: profiles
+        type: string
+      type:
+        example: INSERT
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@example.com
+    name: API Destek
+  description: |-
+    Yapay zeka destekli otonom sosyal medya içerik yönetim sistemi API'si.
+    Bu API, kullanıcıların Instagram hesaplarını bağlamasını, AI ile içerik üretmesini
+    ve otonom ajanlar aracılığıyla otomatik paylaşım yapmasını sağlar.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Otonom Sosyal Medya Ajan API
+  version: "1.0"
+paths:
+  /api/agent-config:
+    get:
+      description: Kullanıcının otonom ajan yapılandırmasını döner
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.AgentConfigResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Ajan yapılandırmasını getir
+      tags:
+      - Agent Config
+    put:
+      consumes:
+      - application/json
+      description: Kullanıcının otonom ajan ayarlarını günceller (AI sağlayıcı, ton,
+        sıklık vb.)
+      parameters:
+      - description: Yapılandırma bilgileri
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/cmd_api.UpdateAgentConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Ajan yapılandırmasını güncelle
+      tags:
+      - Agent Config
+  /api/me:
+    get:
+      description: Doğrulanmış kullanıcının profil bilgilerini döner
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.UserProfileResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Kullanıcı profili
+      tags:
+      - User
+  /api/tasks:
+    get:
+      description: Kullanıcının tüm içerik görevlerini listeler
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.TaskListResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Görev listesi
+      tags:
+      - Tasks
+    post:
+      consumes:
+      - application/json
+      description: AI tarafından üretilecek yeni bir içerik görevi oluşturur
+      parameters:
+      - description: Görev bilgileri
+        in: body
+        name: task
+        required: true
+        schema:
+          $ref: '#/definitions/cmd_api.CreateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/cmd_api.CreateTaskResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Yeni görev oluştur
+      tags:
+      - Tasks
+  /auth/instagram/callback:
+    get:
+      description: |-
+        Instagram yetkilendirmesi sonrasında çağrılır. Authorization code'u token'a çevirir,
+        Instagram Business hesabını bulur ve Supabase'e kaydeder.
+      parameters:
+      - description: Instagram authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: CSRF state parametresi
+        in: query
+        name: state
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.InstagramCallbackResponse'
+        "400":
+          description: Geçersiz code/state veya kullanıcı izin vermedi
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+        "401":
+          description: JWT token geçersiz
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+        "502":
+          description: Instagram API hatası
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Instagram OAuth callback
+      tags:
+      - Instagram OAuth
+  /auth/instagram/login:
+    get:
+      description: |-
+        Kullanıcıyı Instagram yetkilendirme sayfasına yönlendirecek URL'i döner.
+        Dönen authorization_url'e tarayıcıda yönlendirme yapılmalıdır.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.InstagramLoginResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Instagram OAuth başlat
+      tags:
+      - Instagram OAuth
+  /health:
+    get:
+      description: API sunucusunun çalışıp çalışmadığını kontrol eder
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.HealthResponse'
+      summary: Sağlık kontrolü
+      tags:
+      - System
+  /webhooks/content-scheduled:
+    post:
+      consumes:
+      - application/json
+      description: İçerik zamanlandığında Supabase tarafından tetiklenir. Worker'a
+        görev gönderir.
+      parameters:
+      - description: Supabase webhook payload'u
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/cmd_api.WebhookPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      summary: İçerik zamanlama webhook'u
+      tags:
+      - Webhooks
+  /webhooks/subscription-updated:
+    post:
+      consumes:
+      - application/json
+      description: Kullanıcı abonelik durumu değiştiğinde Supabase tarafından tetiklenir.
+      parameters:
+      - description: Supabase webhook payload'u
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/cmd_api.WebhookPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      summary: Abonelik güncelleme webhook'u
+      tags:
+      - Webhooks
+  /webhooks/user-created:
+    post:
+      consumes:
+      - application/json
+      description: Supabase'de yeni kullanıcı oluşturulduğunda tetiklenir. Kullanıcı
+        için ilk kurulumu başlatır.
+      parameters:
+      - description: Supabase webhook payload'u
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/cmd_api.WebhookPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/cmd_api.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/cmd_api.ErrorResponse'
+      summary: Yeni kullanıcı webhook'u
+      tags:
+      - Webhooks
+securityDefinitions:
+  BearerAuth:
+    description: 'Supabase JWT token. Format: "Bearer {token}"'
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
