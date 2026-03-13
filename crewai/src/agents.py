@@ -17,21 +17,21 @@ def create_analyst_agent() -> Agent:
     """
     Analyst Agent:
     media_assets ve interaction_analytics tablolarından
-    en iyi performans gösteren 3 görseli seçer.
+    üzerinden en az 3 ay geçmiş ve en iyi performans gösteren 3 görseli seçer.
     """
     return Agent(
-        role="Sosyal Medya Performans Analisti",
+        role="İçerik Geri Dönüşüm Uzmanı",
         goal=(
             "Kullanıcının media_assets ve interaction_analytics verilerini analiz ederek "
-            "en yüksek engagement_rate'e sahip 3 görseli belirle. Her görsel için "
-            "neden başarılı olduğunu açıkla."
+            "en yüksek etkileşimli ama üzerinden en az 3 ay geçmiş 3 görseli getir. "
+            "Her görsel için neden başarılı olduğunu açıkla."
         ),
         backstory=(
-            "Sen deneyimli bir sosyal medya veri analistisin. Instagram içerik "
-            "performansını ölçmekte uzmanlaşmışsın. Etkileşim oranları, beğeni/yorum "
-            "dengesi ve erişim metriklerini analiz ederek hangi görsellerin en etkili "
-            "olduğunu belirlersin. Veri odaklı kararlar alırsın ve sonuçları net bir "
-            "şekilde raporlarsın."
+            "Sen deneyimli bir içerik geri dönüşüm uzmanısın. Instagram içerik "
+            "performansını ölçmekte ve eski içerikleri yeniden değerlendirmekte uzmanlaşmışsın. "
+            "Etkileşim oranları, beğeni/yorum dengesi ve erişim metriklerini analiz ederek hangi "
+            "eski görsellerin yeniden kullanıma en uygun olduğunu belirlersin. Veri odaklı "
+            "kararlar alırsın ve sonuçları net bir şekilde raporlarsın."
         ),
         tools=[FetchTopAssetsTool()],
         verbose=True,
@@ -71,22 +71,23 @@ def create_strategy_agent() -> Agent:
 def create_critic_agent() -> Agent:
     """
     Critic Agent:
-    Strategy Agent çıktılarını negatif prompt'lara göre denetler.
-    Uygunsuz, marka dışı veya sakıncalı içerikleri tespit eder.
+    Strategy Agent çıktılarını ve ilgili görsel meta-verilerini marka sesine 
+    (brand_voice) ve negatif prompt'lara göre denetler. Uygunsuz içerikleri tespit eder.
     """
     return Agent(
         role="İçerik Denetçisi",
         goal=(
             "Strategy Agent tarafından üretilen caption ve hashtag'leri denetle. "
-            "Kullanıcının tanımladığı negatif prompt'lara (kaçınılması gereken konu ve "
-            "ifadeler) uygunluğunu kontrol et. Marka kimliğiyle çelişen, uygunsuz veya "
-            "riskli içerikleri işaretle. Her içerik için bir onay/red kararı ve "
-            "kalite skoru (0-1) ver."
+            "Kullanıcının marka sesine (brand_voice) ve tanımladığı negatif prompt'lara "
+            "(kaçınılması gereken konu/ifadeler) uygunluğunu SADECE metin için değil, "
+            "ilgili görselin meta-verisi (vision_analysis vb.) için de kontrol et. "
+            "Marka kimliğiyle çelişen, uygunsuz veya riskli içerikleri işaretle. "
+            "Her içerik için bir onay/red kararı ve kalite skoru (0-1) ver."
         ),
         backstory=(
             "Sen titiz bir içerik denetçisisin. Markaların itibar risklerini en aza "
-            "indirme konusunda uzmanlaşmışsın. Üretilen her içeriği negatif prompt "
-            "listesine, marka kurallarına ve genel uygunluk standartlarına göre "
+            "indirme konusunda uzmanlaşmışsın. Üretilen metni ve görsel meta-verilerini "
+            "marka sesine, negatif prompt listesine ve marka kurallarına göre "
             "değerlendirirsin. Potansiyel sorunları erken tespit eder ve yapıcı "
             "geri bildirim sunarsın."
         ),
