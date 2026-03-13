@@ -536,11 +536,11 @@ func (c *Client) GetLastPublishedTaskTime(ctx context.Context, userID string) (t
 	return tasks[0].UpdatedAt, nil
 }
 
-// HasPendingAutoTask, kullanıcının halihazırda bekleyen bir otonom (Senaryo B) görevi
+// HasPendingAutoTask, kullanıcının halihazırda bekleyen bir otonom (Recycle Content) görevi
 // olup olmadığını kontrol eder. Çift tetiklemeyi önlemek için kullanılır.
 func (c *Client) HasPendingAutoTask(ctx context.Context, userID string) (bool, error) {
 	url := fmt.Sprintf(
-		"%s/rest/v1/content_tasks?user_id=eq.%s&status=in.(pending,processing)&prompt=like.*Senaryo B*&select=id&limit=1",
+		"%s/rest/v1/content_tasks?user_id=eq.%s&status=in.(pending,processing,scheduled)&prompt=like.*Otonom Tetikleyici*&select=id&limit=1",
 		c.config.URL, userID,
 	)
 

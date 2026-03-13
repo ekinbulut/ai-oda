@@ -22,3 +22,6 @@ Thumbs.db
 
 # Go
 vendor/
+
+crewai/.venv/*
+crewai/.venv/bin

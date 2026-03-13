@@ -165,9 +165,9 @@ func (w *Watcher) CheckUserInactivity(ctx context.Context) {
 			continue
 		}
 
-		// 6. Senaryo B'yi tetikle
-		if err := w.triggerScenarioB(ctx, userID); err != nil {
-			log.Printf("❌ Senaryo B tetiklenemedi (kullanıcı %s): %v", userID, err)
+		// 6. Recycle Content'i tetikle
+		if err := w.triggerRecycleContent(ctx, userID); err != nil {
+			log.Printf("❌ Recycle Content tetiklenemedi (kullanıcı %s): %v", userID, err)
 			continue
 		}
 
@@ -175,144 +175,96 @@ func (w *Watcher) CheckUserInactivity(ctx context.Context) {
 	}
 
 	if inactiveCount > 0 {
-		log.Printf("👁️ Kontrol tamamlandı: %d inaktif kullanıcı, %d Senaryo B tetiklendi",
+		log.Printf("👁️ Kontrol tamamlandı: %d inaktif kullanıcı, %d Recycle Content tetiklendi",
 			inactiveCount, triggeredCount)
 	}
 }
 
-// triggerScenarioB, inaktif bir kullanıcı için "Senaryo B" akışını başlatır.
-// Senaryo B:
-// 1. Kullanıcının yayınlanmamış medya varlıklarını çek
-// 2. En uygun görseli seç (vision analizi + engagement geçmişi)
-// 3. AI ile otomatik caption oluştur
-// 4. İçerik görevini "pending" olarak kaydet (worker döngüsü tarafından işlenecek)
-func (w *Watcher) triggerScenarioB(ctx context.Context, userID string) error {
-	log.Printf("🚀 Senaryo B tetikleniyor: kullanıcı %s", userID)
+// triggerRecycleContent, inaktif bir kullanıcı için "Recycle Content" akışını başlatır.
+// 1. Redis üzerinden CrewAI'ya "Recycle Content" emri gönder.
+// 2. Yanıt olarak gelen En İyi Görsel + Yeni Caption'ı al.
+// 3. Kullanıcının en etkileşimli olduğu saati hesapla.
+// 4. Görevi STATUS_SCHEDULED olarak veritabanına kaydet.
+func (w *Watcher) triggerRecycleContent(ctx context.Context, userID string) error {
+	log.Printf("🚀 Recycle Content tetikleniyor: kullanıcı %s", userID)
 
-	// 1. Yayınlanmamış görselleri çek
-	unpublished, err := w.sbClient.GetUnpublishedAssets(ctx, userID, 5)
-	if err != nil {
-		return fmt.Errorf("yayınlanmamış varlıklar alınamadı: %w", err)
+	if w.redisBridge == nil {
+		return fmt.Errorf("redis köprüsü aktif değil, Recycle Content çalıştırılamaz")
 	}
 
-	if len(unpublished) == 0 {
-		log.Printf("ℹ️ Kullanıcı %s için yayınlanmamış medya varlığı bulunamadı, atlanıyor", userID)
-		return nil
-	}
-
-	// 2. En uygun görseli seç
-	selectedAsset := w.selectBestAsset(unpublished)
-	log.Printf("📸 Seçilen görsel: %s (%s)", selectedAsset.ID, selectedAsset.StorageURL)
-
-	// 3. Marka bağlamını al
-	agentCtx, err := w.sbClient.GetAgentContext(ctx, userID)
-	if err != nil {
-		log.Printf("⚠️ Marka bağlamı alınamadı (kullanıcı %s), varsayılan kullanılacak: %v", userID, err)
-	}
-
-	// 4. CrewAI üzerinden strateji iste (mümkünse)
-	if w.redisBridge != nil {
-		strategyResult, err := w.requestCrewAIForScenarioB(ctx, userID, selectedAsset)
-		if err != nil {
-			log.Printf("⚠️ CrewAI strateji hatası (Senaryo B, kullanıcı %s): %v — fallback AI kullanılacak", userID, err)
-		} else if strategyResult != nil && strategyResult.Status == "success" && len(strategyResult.Contents) > 0 {
-			// CrewAI başarılı — görev oluştur
-			return w.createAutoTask(ctx, userID, selectedAsset, strategyResult.Contents[0].Caption, strategyResult.Contents[0].Hashtags)
-		}
-	}
-
-	// 5. Fallback: Doğrudan AI ile caption oluştur
-	prompt := w.buildScenarioBPrompt(selectedAsset, agentCtx)
-	content, err := w.aiGen.GenerateContent(ctx, prompt)
-	if err != nil {
-		return fmt.Errorf("AI içerik üretme hatası: %w", err)
-	}
-
-	// 6. Otonom görev oluştur
-	return w.createAutoTask(ctx, userID, selectedAsset, content.Caption, content.Hashtags)
-}
-
-// selectBestAsset, yayınlanmamış görseller arasından en uygununu seçer.
-// Seçim kriterleri: vision analizi varsa tercih et, yoksa en yenisini seç.
-func (w *Watcher) selectBestAsset(assets []supabase.MediaAsset) supabase.MediaAsset {
-	// Vision analizi olan görselleri tercih et
-	for _, asset := range assets {
-		if len(asset.VisionAnalysis) > 0 {
-			return asset
-		}
-	}
-	// Hiçbirinde vision analizi yoksa en yenisini döndür (liste zaten created_at DESC sıralı)
-	return assets[0]
-}
-
-// buildScenarioBPrompt, Senaryo B için AI'ya verilecek prompt'u oluşturur.
-func (w *Watcher) buildScenarioBPrompt(asset supabase.MediaAsset, agentCtx *supabase.AgentContext) string {
-	prompt := "Mevcut bir görselimiz var ve bunun için çekici bir Instagram paylaşımı oluşturmam gerekiyor.\n\n"
-
-	// Vision analizi varsa ekle
-	if desc, ok := asset.VisionAnalysis["description"].(string); ok && desc != "" {
-		prompt += fmt.Sprintf("Görsel açıklaması: %s\n", desc)
-	}
-	if mood, ok := asset.VisionAnalysis["mood"].(string); ok && mood != "" {
-		prompt += fmt.Sprintf("Görselin havası: %s\n", mood)
-	}
-
-	// Marka bağlamı varsa ekle
-	if agentCtx != nil {
-		if agentCtx.BrandVoice != "" {
-			prompt += fmt.Sprintf("\nMarka sesi: %s", agentCtx.BrandVoice)
-		}
-		if agentCtx.TargetAudience != "" {
-			prompt += fmt.Sprintf("\nHedef kitle: %s", agentCtx.TargetAudience)
-		}
-		if len(agentCtx.ContentPillars) > 0 {
-			prompt += "\nİçerik temaları: "
-			for i, p := range agentCtx.ContentPillars {
-				if i > 0 {
-					prompt += ", "
-				}
-				prompt += p
-			}
-		}
-	}
-
-	prompt += "\n\nBu görsel için ilgi çekici, etkileşim odaklı bir Instagram caption ve hashtag'ler oluştur."
-	return prompt
-}
-
-// requestCrewAIForScenarioB, Senaryo B için CrewAI'dan strateji talebinde bulunur.
-func (w *Watcher) requestCrewAIForScenarioB(ctx context.Context, userID string, asset supabase.MediaAsset) (*bridge.StrategyResponse, error) {
 	req := &bridge.StrategyRequest{
 		RequestID: uuid.New().String(),
 		UserID:    userID,
-		TaskID:    fmt.Sprintf("auto-scenarioB-%s", asset.ID),
+		TaskID:    fmt.Sprintf("recycle-content-%d", time.Now().Unix()),
+		Command:   "Recycle Content",
 	}
 
 	// 3 dakika timeout ile CrewAI yanıtını bekle
-	return w.redisBridge.PublishStrategyRequest(ctx, req, 3*time.Minute)
+	strategyResult, err := w.redisBridge.PublishStrategyRequest(ctx, req, 3*time.Minute)
+	if err != nil {
+		return fmt.Errorf("CrewAI strateji hatası: %w", err)
+	}
+
+	if strategyResult.Status != "success" || len(strategyResult.Contents) == 0 {
+		return fmt.Errorf("CrewAI içerik üretemedi veya başarısız oldu")
+	}
+
+	content := strategyResult.Contents[0]
+
+	// En etkileşimli saati bul we rezerve et
+	scheduledAt := w.getPeakEngagementHour(ctx, userID)
+
+	return w.createScheduledTask(ctx, userID, content.AssetID, content.Caption, content.Hashtags, scheduledAt)
 }
 
-// createAutoTask, otonom tetikleyici tarafından oluşturulan içerik görevini Supabase'e kaydeder.
-func (w *Watcher) createAutoTask(ctx context.Context, userID string, asset supabase.MediaAsset, caption, hashtags string) error {
+// getPeakEngagementHour, kullanıcının en iyi performans gösteren görselinin
+// paylaşıldığı veya oluşturulduğu saati bularak bugünün/yarının aynı saatini döner.
+func (w *Watcher) getPeakEngagementHour(ctx context.Context, userID string) time.Time {
+	topAssets, err := w.sbClient.GetTopPerformingAssets(ctx, userID, 1)
+
+	now := time.Now().UTC()
+	targetHour := 19 // Başarısız olursa varsayılan 19:00
+
+	if err == nil && len(topAssets) > 0 {
+		targetHour = topAssets[0].Asset.CreatedAt.Hour()
+	}
+
+	scheduled := time.Date(now.Year(), now.Month(), now.Day(), targetHour, 0, 0, 0, time.UTC)
+	// Eğer o saat bugün geçtiyse yarına planla
+	if scheduled.Before(now) {
+		scheduled = scheduled.Add(24 * time.Hour)
+	}
+
+	return scheduled
+}
+
+// createScheduledTask, otonom tetikleyici tarafından oluşturulan içerik görevini "scheduled" statüsünde kaydeder.
+func (w *Watcher) createScheduledTask(ctx context.Context, userID string, assetID, caption, hashtags string, scheduledAt time.Time) error {
+	imageURL := ""
+	asset, err := w.sbClient.GetMediaAsset(ctx, assetID)
+	if err == nil {
+		imageURL = asset.StorageURL
+	}
+
 	task := supabase.AutoContentTask{
 		ID:          uuid.New().String(),
 		UserID:      userID,
-		Status:      "pending",
+		Status:      "scheduled",
 		ContentType: "photo",
-		Prompt:      fmt.Sprintf("[Senaryo B — Otonom Tetikleyici] Mevcut görsel: %s", asset.ID),
-		Result:      marshalAutoResult(asset.StorageURL, caption, hashtags),
-		ScheduledAt: time.Now().UTC(), // Hemen işlenmesi için şimdi zamanla
+		Prompt:      fmt.Sprintf("[Recycle Content — Otonom Tetikleyici] Geri Dönüştürülen Görsel: %s", assetID),
+		Result:      marshalAutoResult(imageURL, caption, hashtags),
+		ScheduledAt: scheduledAt,
 	}
 
 	if err := w.sbClient.CreateAutoContentTask(ctx, task); err != nil {
 		return fmt.Errorf("otonom görev oluşturulamadı: %w", err)
 	}
 
-	// Görseli "yayınlanmak üzere seçildi" olarak işaretle (çift seçimi önle)
-	_ = w.sbClient.MarkAssetPublished(ctx, asset.ID)
+	// Görseli tekrar işlenmemesi için flag'leyebiliriz (opsiyonel)
+	_ = w.sbClient.MarkAssetPublished(ctx, assetID)
 
-	log.Printf("✅ Senaryo B görevi oluşturuldu: kullanıcı=%s, görsel=%s, görev=%s",
-		userID, asset.ID, task.ID)
+	log.Printf("✅ Recycle Content görevi oluşturuldu: kullanıcı=%s, görsel=%s, görev=%s, zaman=%v",
+		userID, assetID, task.ID, scheduledAt)
 
 	return nil
 }
@@ -323,7 +275,7 @@ func marshalAutoResult(imageURL, caption, hashtags string) string {
 		"image_url": imageURL,
 		"caption":   caption,
 		"hashtags":  hashtags,
-		"source":    "autonomous_watcher_scenario_b",
+		"source":    "autonomous_watcher_recycle_content",
 	}
 	data, _ := json.Marshal(result)
 	return string(data)

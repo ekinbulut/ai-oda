@@ -1,0 +1,2 @@
+[console_scripts]
+crewai-bridge = src.main:main

@@ -34,10 +34,11 @@ type RedisBridge struct {
 
 // StrategyRequest, Go tarafından Python CrewAI'ya gönderilen strateji talebidir.
 type StrategyRequest struct {
-	RequestID string `json:"request_id"` // Benzersiz istek kimliği
-	UserID    string `json:"user_id"`    // Kullanıcı ID
-	TaskID    string `json:"task_id"`    // İçerik görevi ID (opsiyonel)
-	Timestamp string `json:"timestamp"`  // İstek zamanı
+	RequestID string `json:"request_id"`        // Benzersiz istek kimliği
+	UserID    string `json:"user_id"`           // Kullanıcı ID
+	TaskID    string `json:"task_id"`           // İçerik görevi ID (opsiyonel)
+	Command   string `json:"command,omitempty"` // CrewAI'ya verilecek özel emir (ör: Recycle Content)
+	Timestamp string `json:"timestamp"`         // İstek zamanı
 }
 
 // TopAsset, CrewAI Analyst Agent tarafından seçilen en iyi performanslı görsel.
