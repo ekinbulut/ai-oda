@@ -268,3 +268,73 @@ func (oc *OAuthClient) getInstagramProfile(ctx context.Context, accessToken stri
 
 	return &profile, nil
 }
+
+// TokenManager, token yenileme ve bildirim süreçlerini yöneten yapıdır.
+type TokenManager struct {
+	oauthClient *OAuthClient
+	store       TokenStore
+	notifier    TokenNotifier
+}
+
+// TokenInfo, token saklama biriminden okunacak hesap bilgisidir.
+type TokenInfo struct {
+	UserID         string
+	AccountID      string
+	AccessToken    string
+	TokenExpiresAt time.Time
+}
+
+// TokenStore, veritabanı işlemlerini soyutlar.
+type TokenStore interface {
+	GetActiveAccounts(ctx context.Context) ([]TokenInfo, error)
+	UpdateToken(ctx context.Context, userID, accountID, newAccessToken string, newExpiresAt time.Time) error
+}
+
+// TokenNotifier, başarısız yenileme durumunda kullanıcıya bildirim gönderir.
+type TokenNotifier interface {
+	NotifyUser(ctx context.Context, userID, message string)
+}
+
+// NewTokenManager yeni bir TokenManager oluşturur.
+func NewTokenManager(client *OAuthClient, store TokenStore, notifier TokenNotifier) *TokenManager {
+	return &TokenManager{
+		oauthClient: client,
+		store:       store,
+		notifier:    notifier,
+	}
+}
+
+// CheckAndRefreshTokens süresi dolmak üzere olan hesapları bulur ve yeniler.
+func (tm *TokenManager) CheckAndRefreshTokens(ctx context.Context) error {
+	accounts, err := tm.store.GetActiveAccounts(ctx)
+	if err != nil {
+		return fmt.Errorf("aktif hesaplar çekilemedi: %w", err)
+	}
+
+	now := time.Now()
+	// 72 saat sınırı
+	threshold := now.Add(72 * time.Hour)
+
+	for _, acc := range accounts {
+		if !acc.TokenExpiresAt.IsZero() && acc.TokenExpiresAt.Before(threshold) {
+			// Yenilemeye çalış
+			resp, err := tm.oauthClient.RefreshAccessToken(ctx, acc.AccessToken)
+			if err != nil {
+				// Hata bildirimi
+				tm.notifier.NotifyUser(ctx, acc.UserID, "Instagram erişim token süreniz dolmak üzere ve otomatik yenilenemedi. Lütfen tekrar giriş yapın.")
+				continue
+			}
+
+			// Başarılı, DB'yi güncelle
+			newExpiresAt := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+			_ = tm.store.UpdateToken(ctx, acc.UserID, acc.AccountID, resp.AccessToken, newExpiresAt)
+		}
+	}
+
+	return nil
+}
+
+// RefreshAccessToken, mevcut bir long-lived token'ı yeniler.
+func (oc *OAuthClient) RefreshAccessToken(ctx context.Context, currentToken string) (*OAuthTokenResponse, error) {
+	return oc.exchangeForLongLivedToken(ctx, currentToken)
+}

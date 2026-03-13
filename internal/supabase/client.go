@@ -53,6 +53,7 @@ type InstagramAccount struct {
 	AccessToken        string    `json:"access_token"`
 	Username           string    `json:"username"`
 	IsActive           bool      `json:"is_active"`
+	TokenExpiresAt     time.Time `json:"token_expires_at,omitempty"`
 }
 
 // NewClient, yeni bir Supabase istemcisi oluşturur.
@@ -888,6 +889,41 @@ func (c *Client) UpdateAssetImpactScore(ctx context.Context, assetID string, new
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("impact_score güncellenemedi (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// UpdateInstagramToken, belirtilen hesabın access token ve bitiş süresini günceller.
+func (c *Client) UpdateInstagramToken(ctx context.Context, userID, igAccountID, newAccessToken string, newExpiresAt time.Time) error {
+	url := fmt.Sprintf("%s/rest/v1/instagram_accounts?user_id=eq.%s&instagram_account_id=eq.%s", c.config.URL, userID, igAccountID)
+
+	payload := map[string]interface{}{
+		"access_token":     newAccessToken,
+		"token_expires_at": newExpiresAt.UTC().Format(time.RFC3339),
+		"updated_at":       time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("instagram token güncellenemedi (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil

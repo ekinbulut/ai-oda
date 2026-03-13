@@ -79,6 +79,31 @@ func main() {
 		log.Println("✅ Redis Bridge aktif — CrewAI haberleşmesi hazır")
 	}
 
+	// Token Manager (72 saat kontrolü) başlat
+	var tokenManager *social.TokenManager
+	clientID := os.Getenv("INSTAGRAM_CLIENT_ID")
+	clientSecret := os.Getenv("INSTAGRAM_CLIENT_SECRET")
+	redirectURI := os.Getenv("INSTAGRAM_REDIRECT_URI")
+	if clientID != "" && clientSecret != "" && redirectURI != "" {
+		oauthClient, err := social.NewOAuthClient(social.OAuthConfig{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			RedirectURI:  redirectURI,
+		})
+		if err == nil {
+			tokenManager = social.NewTokenManager(
+				oauthClient,
+				&tokenStoreAdapter{sbClient: sbClient},
+				&tokenNotifierAdapter{},
+			)
+			log.Println("✅ TokenManager (72 saat kontrolü) hazır")
+		} else {
+			log.Printf("⚠️ OAuth Client başlatılamadı: %v", err)
+		}
+	} else {
+		log.Println("⚠️ OAuth Client config eksik, otonom token yenileme devre dışı")
+	}
+
 	// Otonom Tetikleyici (Watcher) başlat
 	userWatcher := watcher.NewFromEnv(sbClient, aiGenerator, redisBridge)
 	go userWatcher.Start(ctx)
@@ -96,14 +121,23 @@ func main() {
 
 	// Günlük etkileşim senkronizasyonu için takipçi
 	lastSyncDate := ""
+	lastTokenCheck := time.Time{}
 
 	for {
 		select {
 		case <-ticker.C:
 			processAgentTasks(ctx, sbClient, aiGenerator, igClient, redisBridge)
 
-			// Günde bir kez Insights Sync çalıştır (Örn: Gece 02:00 civarı)
 			now := time.Now()
+
+			// Saatlik Token Yenileme Kontrolü
+			if tokenManager != nil && now.Sub(lastTokenCheck) >= 1*time.Hour {
+				log.Println("🔑 Süresi dolmak üzere olan token'lar kontrol ediliyor...")
+				_ = tokenManager.CheckAndRefreshTokens(ctx)
+				lastTokenCheck = now
+			}
+
+			// Günde bir kez Insights Sync çalıştır (Örn: Gece 02:00 civarı)
 			dateStr := now.Format("2006-01-02")
 			if now.Hour() == 2 && dateStr != lastSyncDate {
 				log.Println("📊 Günlük etkileşim senkronizasyonu başlatılıyor...")
@@ -345,4 +379,39 @@ func calculateEngagementRate(i *social.InstagramInsights) float64 {
 		return 0
 	}
 	return (float64(i.Engagement) / float64(i.Reach)) * 100
+}
+
+// ----------------------------------------------------------------------------
+// Token Yenileme (Refresh) Adaptörleri
+// ----------------------------------------------------------------------------
+
+type tokenStoreAdapter struct {
+	sbClient *supabase.Client
+}
+
+func (a *tokenStoreAdapter) GetActiveAccounts(ctx context.Context) ([]social.TokenInfo, error) {
+	accounts, err := a.sbClient.GetActiveInstagramAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var infos []social.TokenInfo
+	for _, acc := range accounts {
+		infos = append(infos, social.TokenInfo{
+			UserID:         acc.UserID,
+			AccountID:      acc.InstagramAccountID,
+			AccessToken:    acc.AccessToken,
+			TokenExpiresAt: acc.TokenExpiresAt,
+		})
+	}
+	return infos, nil
+}
+
+func (a *tokenStoreAdapter) UpdateToken(ctx context.Context, userID, accountID, newAccessToken string, newExpiresAt time.Time) error {
+	return a.sbClient.UpdateInstagramToken(ctx, userID, accountID, newAccessToken, newExpiresAt)
+}
+
+type tokenNotifierAdapter struct{}
+
+func (n *tokenNotifierAdapter) NotifyUser(ctx context.Context, userID, message string) {
+	NotifyUser(ctx, userID, message)
 }
