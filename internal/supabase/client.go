@@ -226,6 +226,7 @@ type MediaAsset struct {
 	OriginalFilename string               `json:"original_filename"`
 	FileSizeBytes   int64                  `json:"file_size_bytes"`
 	MimeType        string                 `json:"mime_type"`
+	ImpactScore     float64                `json:"impact_score"`
 	CreatedAt       time.Time              `json:"created_at"`
 	UpdatedAt       time.Time              `json:"updated_at"`
 }
@@ -803,6 +804,90 @@ func (c *Client) UpdateTaskWithPostID(ctx context.Context, taskID, postID string
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("görev güncellenemedi (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// CreateMediaAsset, yeni bir medya varlığını media_assets tablosuna ekler ve oluşturulan kaydı döner.
+func (c *Client) CreateMediaAsset(ctx context.Context, asset MediaAsset) (*MediaAsset, error) {
+	url := fmt.Sprintf("%s/rest/v1/media_assets", c.config.URL)
+
+	payload := map[string]interface{}{
+		"user_id":           asset.UserID,
+		"media_type":        asset.MediaType,
+		"storage_url":       asset.StorageURL,
+		"is_published":      asset.IsPublished,
+		"vision_analysis":   asset.VisionAnalysis,
+		"original_filename": asset.OriginalFilename,
+		"file_size_bytes":   asset.FileSizeBytes,
+		"mime_type":         asset.MimeType,
+		"impact_score":      asset.ImpactScore,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("medya varlığı oluşturulamadı (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var createdAssets []MediaAsset
+	if err := json.NewDecoder(resp.Body).Decode(&createdAssets); err != nil {
+		return nil, fmt.Errorf("oluşturulan varlık çözümlenemedi: %w", err)
+	}
+
+	if len(createdAssets) == 0 {
+		return nil, fmt.Errorf("medya varlığı oluşturuldu fakat yanıt boş döndü")
+	}
+
+	return &createdAssets[0], nil
+}
+
+// UpdateAssetImpactScore, belirtilen medya varlığının impact_score ve etkileşim değerlerini günceller.
+func (c *Client) UpdateAssetImpactScore(ctx context.Context, assetID string, newScore float64) error {
+	url := fmt.Sprintf("%s/rest/v1/media_assets?id=eq.%s", c.config.URL, assetID)
+
+	payload := map[string]interface{}{
+		"impact_score": newScore,
+		"updated_at":   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payload serileştirilemedi: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("istek oluşturulamadı: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("istek gönderilemedi: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("impact_score güncellenemedi (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
