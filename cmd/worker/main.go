@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -162,9 +163,16 @@ func processAgentTasks(
 				resultJSON, _ := json.Marshal(strategyResult)
 				_ = sbClient.UpdateTaskStatus(ctx, task.ID, "completed", string(resultJSON))
 
-				// DIRECT PUBLISHING: Güven Puanı > 85 ise doğrudan yayınla
-				if strategyResult.Review != nil && strategyResult.Review.Score > 0.85 {
-					log.Printf("🚀 Yüksek güven puanı (%.2f)! Doğrudan yayınlanıyor...", strategyResult.Review.Score)
+				// DIRECT PUBLISHING (Safe-Gate)
+				if strategyResult.Review != nil && strategyResult.Review.Score >= 0.80 && len(strategyResult.Contents) > 0 {
+					log.Printf("🚀 Güven Puanı yeterli (%.2f). Safe-Gate kontrolleri başlatılıyor...", strategyResult.Review.Score)
+
+					// 1. Validation Middleware: Negatif Kelime Filtresi
+					var negativePrompts []string
+					agentCtx, err := sbClient.GetAgentContext(ctx, task.UserID)
+					if err == nil && agentCtx != nil {
+						negativePrompts = agentCtx.NegativePrompts
+					}
 
 					for _, content := range strategyResult.Contents {
 						imageURL := ""
@@ -176,8 +184,26 @@ func processAgentTasks(
 							}
 						}
 
+						// Fall-Back Mechanism: Müsait bir görsel bulunamadıysa
 						if imageURL == "" {
-							log.Printf("⚠️ Görev %s için görsel URL'i bulunamadı, atlanıyor.", task.ID)
+							log.Printf("⚠️ Görev %s için görsel URL'i bulunamadı. Fall-Back tetikleniyor.", task.ID)
+							NotifyUser(ctx, task.UserID, "Senin için bir şey planlayamadım, bir göz atar mısın?")
+							continue
+						}
+
+						// Negatif kelime kontrolü (büyük/küçük harf duyarsız)
+						hasNegativeWord := false
+						captionLower := strings.ToLower(content.Caption)
+						for _, word := range negativePrompts {
+							if word != "" && strings.Contains(captionLower, strings.ToLower(word)) {
+								log.Printf("🚨 Safe-Gate İptali: Negatif kelime tespit edildi ('%s').", word)
+								hasNegativeWord = true
+								break
+							}
+						}
+
+						if hasNegativeWord {
+							NotifyUser(ctx, task.UserID, "İçerikte negatif bir kelime tespit ettim, otonom yayını durdurdum. Lütfen bir göz atar mısın?")
 							continue
 						}
 
@@ -197,6 +223,14 @@ func processAgentTasks(
 							_ = sbClient.MarkAssetPublished(ctx, content.AssetID)
 						}
 					}
+				} else {
+					// Fall-Back Mechanism: Puan 80'in altındaysa veya üretilen içerik yoksa
+					score := 0.0
+					if strategyResult.Review != nil {
+						score = strategyResult.Review.Score
+					}
+					log.Printf("⚠️ Safe-Gate Fall-Back: Otonom yayın iptal edildi (Puan: %.2f, İçerik Sayısı: %d)", score, len(strategyResult.Contents))
+					NotifyUser(ctx, task.UserID, "Senin için bir şey planlayamadım, bir göz atar mısın?")
 				}
 				continue
 			}
@@ -231,6 +265,14 @@ func requestCrewAIStrategy(
 	// 5 dakika timeout ile CrewAI yanıtını bekle
 	return redisBridge.PublishStrategyRequest(ctx, req, 5*time.Minute)
 }
+
+// NotifyUser kullanıcıya sistem bildirimi gönderir (Fall-Back mekanizması vs.)
+func NotifyUser(ctx context.Context, userID, message string) {
+	// TODO: Gerçek bildirim altyapısına (FCM, Push, WebSocket vb.) entegre edilecek.
+	// Şimdilik sadece log'a ve veritabanına bildirim olarak yazabilir/konsola loglayabiliriz.
+	log.Printf("🔔 BİLDİRİM [Kullanıcı: %s]: %s", userID, message)
+}
+
 
 // syncInstagramInsights, Instagram'dan etkileşim verilerini çekip DB'yi günceller.
 func syncInstagramInsights(ctx context.Context, sbClient *supabase.Client) {
