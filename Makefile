@@ -20,7 +20,7 @@ crewai-install:
 # Swagger dokümantasyonunu yeniden üret
 swagger:
 	~/go/bin/swag init -g cmd/api/main.go -o docs --parseDependency --parseInternal
-	@echo "✅ Swagger docs üretildi: http://localhost:8080/swagger/index.html"
+	@echo "✅ Swagger docs üretildi: https://amada-ludicrous-overstoutly.ngrok-free.dev/swagger/index.html"
 
 # Swagger CLI'ı yükle (ilk kez)
 swagger-install:

@@ -111,7 +111,7 @@ make crewai
 ## 📖 API Documentation
 
 The API comes with built-in Swagger documentation. Once the API is running, visit:
-🔗 [http://localhost:8080/swagger/index.html](http://localhost:8080/swagger/index.html)
+🔗 [https://amada-ludicrous-overstoutly.ngrok-free.dev/swagger/index.html](https://amada-ludicrous-overstoutly.ngrok-free.dev/swagger/index.html)
 
 ---
 
