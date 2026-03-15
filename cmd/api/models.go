@@ -89,9 +89,42 @@ type InstagramCallbackResponse struct {
 
 // WebhookPayload, Supabase webhook gövdesi.
 type WebhookPayload struct {
-	Type    string                 `json:"type" example:"INSERT"`
-	Table   string                 `json:"table" example:"profiles"`
-	Record  map[string]interface{} `json:"record"`
-	Schema  string                 `json:"schema" example:"public"`
+	Type      string                 `json:"type" example:"INSERT"`
+	Table     string                 `json:"table" example:"profiles"`
+	Record    map[string]interface{} `json:"record"`
+	Schema    string                 `json:"schema" example:"public"`
 	OldRecord map[string]interface{} `json:"old_record,omitempty"`
+}
+
+// InstagramWebhookPayload, Meta/Instagram'dan gelen webhook bildirimi.
+type InstagramWebhookPayload struct {
+	Object string                 `json:"object" example:"instagram"`
+	Entry  []InstagramWebhookEntry `json:"entry"`
+}
+
+// InstagramWebhookEntry, tek bir webhook bildirimi girdisi.
+type InstagramWebhookEntry struct {
+	ID      string                  `json:"id" example:"17841400123456789"`
+	Time    int64                   `json:"time" example:"1520383571"`
+	Changes []InstagramWebhookChange `json:"changes"`
+}
+
+// InstagramWebhookChange, webhook bildirimi içindeki değişiklik detayları.
+type InstagramWebhookChange struct {
+	Field string                 `json:"field" example:"comments"`
+	Value InstagramWebhookValue  `json:"value"`
+}
+
+// InstagramWebhookValue, değişiklik değerinin içeriği.
+type InstagramWebhookValue struct {
+	ID                  string `json:"id,omitempty" example:"17841405710997973"`
+	Text                string `json:"text,omitempty" example:"Harika bir paylaşım!"`
+	From                struct {
+		ID       string `json:"id" example:"17841405710997973"`
+		Username string `json:"username" example:"johndoe"`
+	} `json:"from,omitempty"`
+	MediaID             string `json:"media_id,omitempty"`
+	InstagramUserID     string `json:"instagram_user_id,omitempty"`
+	Verb                string `json:"verb,omitempty" example:"add"`
+	Username            string `json:"username,omitempty"`
 }

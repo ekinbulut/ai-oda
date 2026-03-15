@@ -1,13 +1,17 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -253,14 +257,21 @@ func handleInstagramWebhookVerification(w http.ResponseWriter, r *http.Request) 
 	token := r.URL.Query().Get("hub.verify_token")
 	challenge := r.URL.Query().Get("hub.challenge")
 
+	log.Printf("🔍 Webhook Doğrulama İsteği: mode=%s, token=%s, challenge=%s", mode, token, challenge)
+	log.Printf("🔑 Beklenen Token (ENV): %s", verifyToken)
+
 	if mode == "subscribe" && token == verifyToken {
-		log.Printf("✅ Instagram webhook doğrulaması başarılı")
+		log.Printf("✅ Instagram webhook doğrulaması başarılı. Gönderilen challenge: %s", challenge)
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(challenge))
 	} else {
-		log.Printf("❌ Instagram webhook doğrulaması başarısız - beklenen: %s, gelen: %s", verifyToken, token)
+		log.Printf("❌ Instagram webhook doğrulaması başarısız!")
+		if token != verifyToken {
+			log.Printf("👉 Sebep: Token uyuşmuyor. Gelen: '%s', Beklenen: '%s'", token, verifyToken)
+		}
 		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("Doğrulama başarısız"))
 	}
 }
 
@@ -268,26 +279,84 @@ func handleInstagramWebhookVerification(w http.ResponseWriter, r *http.Request) 
 //
 //	@Summary		Instagram Webhook olayları
 //	@Description	Instagram'dan gelen gerçek zamanlı bildirimleri (yorumlar, mesajlar vb.) işler.
+//	@Description	X-Hub-Signature-256 header'ı ile imza doğrulaması yapar.
 //	@Tags			Webhooks
 //	@Accept			json
 //	@Produce		json
 //	@Success		200	{object}	MessageResponse
+//	@Failure		401	{string}	string	"Geçersiz imza"
 //	@Router			/webhooks/instagram [post]
 func handleInstagramWebhookEvents(w http.ResponseWriter, r *http.Request) {
-	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Geçersiz payload", http.StatusBadRequest)
+	// 1. Body'yi oku (hem imza kontrolü hem de decode için)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Body okunamadı", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
-	log.Printf("📥 Instagram webhook olayı alındı: %v", payload)
+	// 2. İmza doğrulaması (Opsiyonel ama dokümantasyon öneriyor)
+	signature := r.Header.Get("X-Hub-Signature-256")
+	if !validateInstagramSignature(body, signature) {
+		log.Printf("⚠️ Instagram webhook imza doğrulaması başarısız")
+		// Not: Meta bazen yanlış imza gönderebilir mi? Geliştirme/test sırasında loglamak güvenli.
+		// Kesinlik için 401 dönebiliriz.
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-	// TODO: Olay tipine göre (comment, mention vb.) işlem yap
-	
+	// 3. Payload'u decode et
+	var payload InstagramWebhookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		log.Printf("❌ Instagram webhook decode hatası: %v", err)
+		http.Error(w, "Geçersiz JSON", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("📥 Instagram webhook olayı alındı: %s (Entry: %d)", payload.Object, len(payload.Entry))
+
+	// 4. Yanıtı hemen dön (dokümantasyon 200 OK'in hızlı dönülmesini şart koşar)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(MessageResponse{Message: "received"})
+
+	// 5. Arka planda işle (Async processing)
+	go processInstagramWebhook(payload)
+}
+
+// validateInstagramSignature, Meta'dan gelen X-Hub-Signature-256'yı doğrular.
+func validateInstagramSignature(body []byte, signatureHeader string) bool {
+	appSecret := os.Getenv("INSTAGRAM_CLIENT_SECRET")
+	if appSecret == "" || signatureHeader == "" {
+		return false
+	}
+
+	// Header formatı: sha256={signature}
+	if !strings.HasPrefix(signatureHeader, "sha256=") {
+		return false
+	}
+	actualSig := signatureHeader[7:]
+
+	mac := hmac.New(sha256.New, []byte(appSecret))
+	mac.Write(body)
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(actualSig), []byte(expectedSig))
+}
+
+// processInstagramWebhook, gelen olayları arka planda işler.
+func processInstagramWebhook(payload InstagramWebhookPayload) {
+	for _, entry := range payload.Entry {
+		for _, change := range entry.Changes {
+			log.Printf("⚡️ İşleniyor: %s (Field: %s, ID: %s)", entry.ID, change.Field, change.Value.ID)
+			
+			// Örnek: Yorum geldiyse AI ajanı tetikle
+			if change.Field == "comments" && change.Value.Verb == "add" {
+				log.Printf("💬 Yeni yorum: %s -> %s", change.Value.From.Username, change.Value.Text)
+				// TODO: Redis üzerinden CrewAI'ya veya worker'a mesaj gönder
+			}
+		}
+	}
 }
 
 // ============================================================
