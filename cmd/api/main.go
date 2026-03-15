@@ -88,9 +88,12 @@ func main() {
 
 	// Supabase webhook endpoint'leri (herkese açık - Supabase tarafından çağrılır)
 	r.Route("/webhooks", func(r chi.Router) {
+		r.Get("/", handleInstagramWebhookVerification)
 		r.Post("/user-created", handleUserCreated)
 		r.Post("/subscription-updated", handleSubscriptionUpdated)
 		r.Post("/content-scheduled", handleContentScheduled)
+		r.Get("/instagram", handleInstagramWebhookVerification)
+		r.Post("/instagram", handleInstagramWebhookEvents)
 	})
 
 	// Instagram OAuth endpoint'leri (JWT ile korumalı)
@@ -226,6 +229,62 @@ func handleContentScheduled(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📥 İçerik zamanlama webhook'u alındı: %v", payload)
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(MessageResponse{Message: "received"})
+}
+
+// handleInstagramWebhookVerification godoc
+//
+//	@Summary		Instagram Webhook doğrulaması
+//	@Description	Meta/Instagram webhook kurulumu sırasında doğrulama için çağrılır.
+//	@Tags			Webhooks
+//	@Produce		plain
+//	@Param			hub.mode			query		string	true	"Eşleşmesi gereken 'subscribe' değeri"
+//	@Param			 hub.challenge		query		string	true	"Echo yapılması gereken challenge string"
+//	@Param			hub.verify_token	query		string	true	"Doğrulanacak olan verify token"
+//	@Success		200					{string}	string	"hub.challenge"
+//	@Failure		403					{string}	string	"Doğrulama başarısız"
+//	@Router			/webhooks [get]
+func handleInstagramWebhookVerification(w http.ResponseWriter, r *http.Request) {
+	verifyToken := os.Getenv("INSTAGRAM_WEBHOOK_VERIFY_TOKEN")
+	
+	mode := r.URL.Query().Get("hub.mode")
+	token := r.URL.Query().Get("hub.verify_token")
+	challenge := r.URL.Query().Get("hub.challenge")
+
+	if mode == "subscribe" && token == verifyToken {
+		log.Printf("✅ Instagram webhook doğrulaması başarılı")
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(challenge))
+	} else {
+		log.Printf("❌ Instagram webhook doğrulaması başarısız - beklenen: %s, gelen: %s", verifyToken, token)
+		w.WriteHeader(http.StatusForbidden)
+	}
+}
+
+// handleInstagramWebhookEvents godoc
+//
+//	@Summary		Instagram Webhook olayları
+//	@Description	Instagram'dan gelen gerçek zamanlı bildirimleri (yorumlar, mesajlar vb.) işler.
+//	@Tags			Webhooks
+//	@Accept			json
+//	@Produce		json
+//	@Success		200	{object}	MessageResponse
+//	@Router			/webhooks/instagram [post]
+func handleInstagramWebhookEvents(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Geçersiz payload", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	log.Printf("📥 Instagram webhook olayı alındı: %v", payload)
+
+	// TODO: Olay tipine göre (comment, mention vb.) işlem yap
+	
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(MessageResponse{Message: "received"})
