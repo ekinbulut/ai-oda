@@ -31,6 +31,10 @@ build:
 	go build -o bin/api ./cmd/api
 	go build -o bin/worker ./cmd/worker
 
+# Tüm Go testlerini çalıştır
+test:
+	go test ./...
+
 # Temizle
 clean:
 	rm -rf bin/
